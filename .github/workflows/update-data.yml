@@ -1,0 +1,38 @@
+name: Update fuel price data
+
+on:
+  schedule:
+    # Every day at 06:30 UTC (12:00 IST), after PPAC posts the day's prices
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install "pypdf>=5.0.0,<7.0.0"
+
+      - name: Fetch latest prices
+        run: python update_data.py
+
+      - name: Commit updated data
+        run: |
+          if git diff --quiet data/fuel_prices.csv; then
+            echo "No new prices."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/fuel_prices.csv
+          git commit -m "Update fuel prices to $(tail -1 data/fuel_prices.csv | cut -d, -f1)"
+          git push

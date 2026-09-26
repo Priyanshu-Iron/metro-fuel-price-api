@@ -2,11 +2,14 @@
 
 A FastAPI-based REST API that provides time-series analysis of retail petrol and diesel prices across major Indian metro cities (Delhi, Mumbai, Chennai, and Kolkata).
 
+Price data covers every day since 16 June 2017 and is refreshed daily from official government figures published by the [Petroleum Planning & Analysis Cell (PPAC)](https://ppac.gov.in/retail-selling-price-rsp-of-petrol-diesel-and-domestic-lpg/rsp-of-petrol-and-diesel-in-metro-cities-since-16-6-2017).
+
 ## Features
 
 - **Raw Price Data**: Get exact daily fuel prices
 - **Moving Average**: Smoothed price trends using configurable rolling windows
 - **Anomaly Detection**: Identify unusual price spikes/drops using Z-score analysis
+- **Daily Data Refresh**: A scheduled GitHub Action pulls the latest prices from PPAC every day
 - **Flexible Filtering**: Filter by date ranges, cities, and fuel types
 - **OpenAPI Documentation**: Auto-generated Swagger UI documentation
 
@@ -15,8 +18,11 @@ A FastAPI-based REST API that provides time-series analysis of retail petrol and
 ```
 .
 ├── main.py                 # FastAPI application
-├── data/                   # Dataset directory
-│   └── Retail Selling Price (RSP) of Petrol and Diesel in Metro Cities.csv
+├── update_data.py          # Fetches the latest prices from PPAC
+├── data/
+│   └── fuel_prices.csv     # Daily prices since 2017-06-16
+├── .github/workflows/
+│   └── update-data.yml     # Daily data refresh job
 ├── metro-fuel-prices-api.yaml  # OpenAPI specification
 ├── pyproject.toml         # Poetry dependencies
 ├── Dockerfile             # Docker configuration
@@ -50,9 +56,10 @@ A FastAPI-based REST API that provides time-series analysis of retail petrol and
    poetry install
    ```
 
-4. **Place the dataset**
-   - Create a `data/` directory in the project root
-   - Place the CSV file: `Retail Selling Price (RSP) of Petrol and Diesel in Metro Cities.csv` in the `data/` directory
+4. **(Optional) Fetch the latest prices**
+   ```bash
+   poetry run python update_data.py
+   ```
 
 5. **Run the server**
    ```bash
@@ -164,15 +171,22 @@ data = response.json()
 print(f"Found {len(data)} price points")
 ```
 
-## Data Format
+## Data Source & Updates
 
-The API expects a CSV file with the following structure:
-- Date column (calendar day)
-- City column (metro cities)
-- Product column (fuel type)
-- Price column (retail selling price in INR/L)
+Prices are the retail selling prices of Indian Oil Corporation (IOC), as published by the [Petroleum Planning & Analysis Cell (PPAC)](https://ppac.gov.in), Ministry of Petroleum & Natural Gas. PPAC posts a daily PDF with the complete price history since daily pricing began on 16 June 2017.
 
-Missing price values are treated as 0.
+`update_data.py` finds the latest PDF, parses every row and rewrites `data/fuel_prices.csv`:
+
+```
+Date,City,Product,Price
+2026-09-25,Delhi,Petrol,102.12
+```
+
+- **Automatic:** `.github/workflows/update-data.yml` runs the script every day at 12:00 IST and commits the CSV if prices changed. It can also be triggered manually from the Actions tab.
+- **Manual:** `poetry run python update_data.py`
+- **No restart needed:** the API reloads the CSV automatically when the file changes.
+
+The `/` endpoint reports the date range currently available. Missing price values are treated as 0.
 
 ## Development
 
@@ -268,9 +282,9 @@ docker stop fuel-api
    lsof -ti:8000 | xargs kill -9
    ```
 
-2. **CSV file not found**
-   - Ensure the CSV file is placed in the `data/` directory
-   - Check the exact filename matches the expected name
+2. **CSV file not found / data out of date**
+   - Run `poetry run python update_data.py` to regenerate `data/fuel_prices.csv`
+   - On macOS with the python.org installer, an `SSL: CERTIFICATE_VERIFY_FAILED` error means you need to run `Install Certificates.command` from your Python folder in Applications
 
 3. **Permission errors in Docker**
    - The Dockerfile creates a non-root user for security
@@ -278,14 +292,15 @@ docker stop fuel-api
 
 ### Logs and Debugging
 
-- Check server logs for column detection and data loading information
+- Check server logs for data loading information
 - Use the `/docs` endpoint to test API calls interactively
-- Verify CSV data format and column names
 
 ## Tech Stack
 
 - **FastAPI** – web framework and OpenAPI docs
 - **Pandas** – data loading, rolling statistics and anomaly detection
+- **pypdf** – parsing the official PPAC price PDF
+- **GitHub Actions** – scheduled daily data refresh
 - **Poetry** – dependency management
 - **Docker** – containerized deployment
 

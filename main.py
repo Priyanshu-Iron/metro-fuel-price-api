@@ -1,77 +1,39 @@
 # main.py
 import re
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 
 app = FastAPI(title="India Metro Fuel-Price Time-Series API", version="1.0.0")
 
-# Load and prepare the dataset
-try:
-    df = pd.read_csv(
-        "data/Retail Selling Price (RSP) of Petrol and Diesel in Metro Cities.csv"
-    )
+DATA_PATH = Path(__file__).parent / "data" / "fuel_prices.csv"
 
-    # Clean up column names (strip spaces and handle variations)
-    df.columns = [c.strip() for c in df.columns]
+_cache = {"mtime": None, "df": pd.DataFrame(columns=["Date", "City", "Product", "Price"])}
 
-    # Print columns for debugging
-    print("Original columns:", df.columns.tolist())
 
-    # Handle different possible column name variations
-    date_col = None
-    city_col = None
-    product_col = None
-    price_col = None
+def get_df() -> pd.DataFrame:
+    """Return the dataset, reloading it whenever the CSV file changes on disk"""
+    try:
+        mtime = DATA_PATH.stat().st_mtime
+    except FileNotFoundError:
+        print(f"Data file not found: {DATA_PATH}. Run update_data.py to fetch it.")
+        return _cache["df"]
 
-    for col in df.columns:
-        col_lower = col.lower()
-        if "calendar" in col_lower or "date" in col_lower:
-            date_col = col
-        elif "metro" in col_lower or "cities" in col_lower or "city" in col_lower:
-            city_col = col
-        elif "product" in col_lower:
-            product_col = col
-        elif (
-            "retail selling price" in col_lower
-            or "rsp" in col_lower
-            or "price" in col_lower
-        ):
-            price_col = col
+    if mtime != _cache["mtime"]:
+        df = pd.read_csv(DATA_PATH)
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        # Treat missing prices as 0
+        df["Price"] = pd.to_numeric(df["Price"], errors="coerce").fillna(0)
+        df = df.dropna(subset=["Date"])
 
-    # Rename columns for easier access
-    column_mapping = {}
-    if date_col:
-        column_mapping[date_col] = "Date"
-    if city_col:
-        column_mapping[city_col] = "City"
-    if product_col:
-        column_mapping[product_col] = "Fuel_Type"
-    if price_col:
-        column_mapping[price_col] = "Price"
+        _cache["df"], _cache["mtime"] = df, mtime
+        print(f"Loaded {len(df)} rows from {DATA_PATH.name}")
 
-    df = df.rename(columns=column_mapping)
+    return _cache["df"]
 
-    # Convert date column to datetime
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-
-    # Treat missing prices as 0
-    df["Price"] = pd.to_numeric(df["Price"], errors="coerce").fillna(0)
-
-    # Remove any rows with invalid dates
-    df = df.dropna(subset=["Date"])
-
-    print("Final columns:", df.columns.tolist())
-    print("Data shape:", df.shape)
-    print("Sample data:")
-    print(df.head())
-
-except Exception as e:
-    print(f"Error loading data: {e}")
-    # Create empty dataframe as fallback
-    df = pd.DataFrame(columns=["Date", "City", "Fuel_Type", "Price"])
 
 # Constants as per OpenAPI spec
 CITIES = ["Delhi", "Mumbai", "Chennai", "Kolkata"]
@@ -116,7 +78,8 @@ def filter_data(
 ) -> pd.DataFrame:
     """Filter dataframe by city, product and date range"""
     # Case-insensitive product matching as per spec
-    data = df[(df["City"] == city) & (df["Fuel_Type"].str.lower() == product.lower())]
+    df = get_df()
+    data = df[(df["City"] == city) & (df["Product"].str.lower() == product.lower())]
 
     if data.empty:
         return data
@@ -304,6 +267,7 @@ def get_anomalies(
 @app.get("/")
 def root():
     """Root endpoint with API information"""
+    df = get_df()
     return {
         "title": "India Metro Fuel-Price Time-Series API",
         "version": "1.0.0",
@@ -315,6 +279,11 @@ def root():
         },
         "supported_cities": CITIES,
         "supported_products": PRODUCTS,
+        "data_available": {
+            "from": df["Date"].min().strftime("%Y-%m-%d") if not df.empty else None,
+            "to": df["Date"].max().strftime("%Y-%m-%d") if not df.empty else None,
+        },
+        "source": "Petroleum Planning & Analysis Cell (ppac.gov.in), IOC prices",
     }
 
 
