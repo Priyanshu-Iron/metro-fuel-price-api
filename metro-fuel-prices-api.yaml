@@ -1,0 +1,209 @@
+openapi: 3.0.1
+info:
+  title: India Metro Fuel-Price Time-Series API
+  version: "1.0.0"
+  description: |
+    Read-only service that exposes daily retail Petrol & Diesel prices
+    for Delhi, Mumbai, Chennai, and Kolkata.
+    
+    It offers three flavours of *time-series* data:
+    
+      • **Raw** values – exactly what came from the data source  
+      • **Moving-average (MA)** – a smoothed series that reduces daily noise  
+      • **Anomaly detection** – highlights dates where prices jump or drop
+        abnormally, based on a Z-score threshold.
+
+servers:
+  - url: https://api.example.com/v1       # <— swap in your domain
+
+# ────────────────────────────────────────────────────────────────────────────
+paths:
+  /ts/raw:
+    get:
+      summary: Raw daily price series
+      description: |
+        Returns one point per calendar day for the chosen city & product.
+        Use it when you need **exact** prices (e.g. a table view or an
+        unsmoothed chart).
+      parameters:
+        - $ref: '#/components/parameters/city'
+        - $ref: '#/components/parameters/product'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+      responses:
+        "200":
+          description: Array of price points, newest-first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PricePoint' }
+              examples:
+                sample:
+                  summary: 4-day slice (Delhi / Petrol)
+                  value:
+                    - { date: "2025-06-20", price: 94.77, unit: "INR/L" }
+                    - { date: "2025-06-19", price: 94.77, unit: "INR/L" }
+                    - { date: "2025-06-18", price: 94.77, unit: "INR/L" }
+                    - { date: "2025-06-17", price: 94.77, unit: "INR/L" }
+
+  /ts/ma:
+    get:
+      summary: Moving-average series
+      description: |
+        Calculates a rolling average to smooth the raw data—super useful
+        for trend lines.  
+        The **window** query param sets how wide the averaging bucket is.
+        Example: `window=7d` averages each point over the previous seven
+        days (inclusive).
+      parameters:
+        - $ref: '#/components/parameters/city'
+        - $ref: '#/components/parameters/product'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+        - $ref: '#/components/parameters/window'
+      responses:
+        "200":
+          description: Points with raw price **and** MA value
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MovingAveragePoint' }
+              examples:
+                sample:
+                  summary: 7-day MA
+                  value:
+                    - { date: "2025-06-20", price: 94.77, ma: 94.77 }
+                    - { date: "2025-06-19", price: 94.77, ma: 94.77 }
+
+  /ts/anomaly:
+    get:
+      summary: Anomaly-flagged series
+      description: |
+        Uses a simple **Z-score** test to mark unusual spikes/dips.
+        A point is an anomaly if  
+        `abs(price − mean_of_window) / std_dev_of_window >= z`.
+        The default `z` is **2.5** (≈ a 98 % confidence interval).
+      parameters:
+        - $ref: '#/components/parameters/city'
+        - $ref: '#/components/parameters/product'
+        - $ref: '#/components/parameters/from'
+        - $ref: '#/components/parameters/to'
+        - $ref: '#/components/parameters/window'
+        - $ref: '#/components/parameters/z'
+      responses:
+        "200":
+          description: Points plus z-score & anomaly flag
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AnomalyPoint' }
+              examples:
+                sample:
+                  summary: One spike found
+                  value:
+                    - { date: "2025-06-20", price: 94.77, z: 0.1,  isAnomaly: false }
+                    - { date: "2025-05-15", price: 98.00, z: 3.2,  isAnomaly: true  }
+
+# ────────────────────────────────────────────────────────────────────────────
+components:
+  # ───── Re-usable query-string parameters ─────
+  parameters:
+    city:
+      name: city
+      in: query
+      required: true
+      description: |
+        4 supported metros.  
+        ✍️ Use an ENUM so clients get auto-complete in Swagger UI.
+      schema:
+        type: string
+        enum: [Delhi, Mumbai, Chennai, Kolkata]
+
+    product:
+      name: product
+      in: query
+      required: true
+      description: Petrol or Diesel. (Case-insensitive.)
+      schema:
+        type: string
+        enum: [Petrol, Diesel]
+
+    from:
+      name: from
+      in: query
+      description: |
+        Start date *inclusive* (`YYYY-MM-DD`).  
+        ✍️ Omit to default to earliest available date in DB.
+      schema:
+        type: string
+        format: date
+
+    to:
+      name: to
+      in: query
+      description: |
+        End date *inclusive* (`YYYY-MM-DD`).  
+        ✍️ Omit to default to **today**.
+      schema:
+        type: string
+        format: date
+
+    window:
+      name: window
+      in: query
+      description: |
+        Rolling window for MA / anomaly calcs.  
+        Format `<number><unit>` where unit ∈ { **d** days, **w** weeks }.  
+        Examples: `7d`, `4w`.  
+        ✍️ Defaults to **7d**.
+      schema:
+        type: string
+        pattern: '^[1-9][0-9]*(d|w)$'
+        example: 7d
+
+    z:
+      name: z
+      in: query
+      description: |
+        Z-score threshold for anomaly detection.  
+        ✍️ Higher values ⇒ fewer anomalies. Default = **2.5**.
+      schema:
+        type: number
+        minimum: 0
+        example: 2.5
+
+  # ───── Response schemas ─────
+  schemas:
+    PricePoint:
+      type: object
+      required: [date, price, unit]
+      properties:
+        date:  { type: string, format: date }
+        price: { type: number, example: 94.77 }
+        unit:  { type: string, example: INR/L }
+
+    MovingAveragePoint:
+      allOf:
+        - $ref: '#/components/schemas/PricePoint'
+        - type: object
+          required: [ma]
+          properties:
+            ma:
+              type: number
+              description: Rolling average over the chosen window.
+
+    AnomalyPoint:
+      allOf:
+        - $ref: '#/components/schemas/PricePoint'
+        - type: object
+          required: [z, isAnomaly]
+          properties:
+            z:
+              type: number
+              description: Calculated Z-score for this point.
+            isAnomaly:
+              type: boolean
+              description: true ⇢ price is an outlier.
