@@ -3,7 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-.env
 .DS_Store
 .idea/
-.vscode/
+config.bat
+node_modules
